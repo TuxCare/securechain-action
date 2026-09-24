@@ -7,7 +7,7 @@ This repository holds no CLI source. The action downloads the released binary
 for a **pinned** version through the same install script every customer uses,
 verifies its checksum against the release's `checksums.txt` before anything
 runs, then runs `securechain check`. The default version is the release this
-action was published with: `v0.1.8`.
+action was published with: `v0.1.9`.
 
 ## Usage
 
@@ -29,14 +29,14 @@ jobs:
           TUXCARE_TOKEN: ${{ secrets.TUXCARE_TOKEN }}
 ```
 
-`@v0` follows the newest release of the 0.x line; `@v0.1.8` pins one
+`@v0` follows the newest release of the 0.x line; `@v0.1.9` pins one
 release of the action, which pins one release of the CLI.
 
 ## Inputs
 
 | input | default | meaning |
 |---|---|---|
-| `version` | `v0.1.8` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
+| `version` | `v0.1.9` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
 | `command` | `check` | `check` is the gate; `status` reads without gating |
 | `dir` | `.` | project root |
 | `args` | | extra arguments, e.g. `--fail-on medium --baseline .securechain-baseline` |
