@@ -1,0 +1,120 @@
+# The SecureChain GitHub Action - a thin public wrapper (doc 08, "The GitHub
+# Action and the GitLab CI component").
+#
+# It holds no CLI source. It downloads the released binary for a PINNED
+# version through the same install script every customer uses, which verifies
+# the download's checksum against the release's checksums.txt before anything
+# runs (and its cosign signature when cosign is on the runner), then runs the
+# gate and hands the SARIF to GitHub code scanning. "latest" is never used: a
+# gate whose binary changes under a pipeline is not a gate.
+#
+# This file is rendered by the release pipeline: v0.1.8 is the CLI
+# release the wrapper was published with, and the wrapper's own tag is that
+# same version. Edit the source in the securechain-cli repository under
+# tools/release/github-action/, never this copy.
+name: SecureChain
+description: Run the SecureChain CLI gate (securechain check) against this repository and upload its SARIF to code scanning
+author: TuxCare
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  version:
+    description: >-
+      SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
+      the default is the release this wrapper was published with.
+    required: false
+    default: "v0.1.8"
+  command:
+    description: The subcommand to run. `check` is the gate; `status` reads without gating.
+    required: false
+    default: check
+  dir:
+    description: The project root, relative to the workspace.
+    required: false
+    default: "."
+  args:
+    description: Extra arguments appended to the command, e.g. `--fail-on medium --baseline .securechain-baseline`.
+    required: false
+    default: ""
+  token:
+    description: >-
+      TuxCare subscription token. Prefer setting TUXCARE_TOKEN in the job's env
+      from a repository secret; this input is an alternative, not a second copy.
+    required: false
+    default: ""
+  sarif:
+    description: For `check`, write SARIF and upload it to GitHub code scanning.
+    required: false
+    default: "true"
+  fail-on-findings:
+    description: Fail the step when the command exits non-zero. Set to "false" to only report.
+    required: false
+    default: "true"
+
+outputs:
+  exit-code:
+    description: The command's exit code (doc 03 has the table; 1 is "findings failed the gate").
+    value: ${{ steps.run.outputs.exit-code }}
+  sarif-file:
+    description: The SARIF file written, when `check` ran with sarif enabled.
+    value: ${{ steps.run.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install securechain ${{ inputs.version }}
+      shell: bash
+      run: |
+        set -eu
+        ver='${{ inputs.version }}'
+        case "$ver" in v[0-9]*) ;; *) echo "::error::version must look like v1.2.3, got: $ver"; exit 2 ;; esac
+        base="https://securechain.tuxcare.com/get"
+        bin="$RUNNER_TEMP/securechain-bin"
+        mkdir -p "$bin"
+        # The install script of the SAME release, so the wrapper and the
+        # binary can never disagree about how a download is verified.
+        curl -fsSL "$base/$ver/install.sh" -o "$RUNNER_TEMP/securechain-install.sh"
+        SECURECHAIN_VERSION="$ver" SECURECHAIN_INSTALL_DIR="$bin" SECURECHAIN_DOWNLOAD_BASE="$base" \
+          sh "$RUNNER_TEMP/securechain-install.sh"
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/securechain" version
+
+    - name: Run securechain ${{ inputs.command }}
+      id: run
+      shell: bash
+      env:
+        SECURECHAIN_TOKEN_INPUT: ${{ inputs.token }}
+      run: |
+        set -u
+        if [ -n "$SECURECHAIN_TOKEN_INPUT" ]; then export TUXCARE_TOKEN="$SECURECHAIN_TOKEN_INPUT"; fi
+        cmd='${{ inputs.command }}'
+        dir='${{ inputs.dir }}'
+        sarif=''
+        if [ "$cmd" = check ] && [ '${{ inputs.sarif }}' = true ]; then
+          sarif="$RUNNER_TEMP/securechain.sarif"
+          # SARIF to the file, the human report to the log: two runs would
+          # double the time, so the log gets the machine document's summary.
+          securechain check --dir "$dir" --output sarif ${{ inputs.args }} > "$sarif"; rc=$?
+          echo "sarif-file=$sarif" >> "$GITHUB_OUTPUT"
+          echo "securechain check exited $rc; SARIF at $sarif"
+        else
+          securechain "$cmd" --dir "$dir" ${{ inputs.args }}; rc=$?
+        fi
+        echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Upload SARIF to code scanning
+      if: steps.run.outputs.sarif-file != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.run.outputs.sarif-file }}
+        category: securechain
+
+    - name: Fail on findings
+      if: inputs.fail-on-findings == 'true' && steps.run.outputs.exit-code != '0'
+      shell: bash
+      run: |
+        echo "::error::securechain ${{ inputs.command }} exited ${{ steps.run.outputs.exit-code }} (1 = findings failed the gate; doc 03 has the table)"
+        exit ${{ steps.run.outputs.exit-code }}
