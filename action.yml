@@ -5,10 +5,13 @@
 # version through the same install script every customer uses, which verifies
 # the download's checksum against the release's checksums.txt before anything
 # runs (and its cosign signature when cosign is on the runner), then runs the
-# gate and hands the SARIF to GitHub code scanning. "latest" is never used: a
-# gate whose binary changes under a pipeline is not a gate.
+# gate and hands the SARIF to GitHub code scanning. With `command: registry`
+# it writes the registry credential into a directory for the job, for the
+# job's own install step, and runs no gate (doc 03, "securechain registry").
+# "latest" is never used: a gate whose binary changes under a pipeline is not
+# a gate.
 #
-# This file is rendered by the release pipeline: v0.1.12 is the CLI
+# This file is rendered by the release pipeline: v0.1.13 is the CLI
 # release the wrapper was published with, and the wrapper's own tag is that
 # same version. Edit the source in the securechain-cli repository under
 # tools/release/github-action/, never this copy.
@@ -25,9 +28,16 @@ inputs:
       SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
       the default is the release this wrapper was published with.
     required: false
-    default: "v0.1.12"
+    default: "v0.1.13"
   command:
-    description: The subcommand to run. `check` is the gate; `status` reads without gating.
+    description: >-
+      The subcommand to run. `check` is the gate; `status` reads without
+      gating; `registry` writes the registry credential into a directory
+      for the job, exports the variables that name it, and runs no gate.
+      Run the action with `registry` before the project's install step, and
+      again after it for the gate, with `if: always()`: the install needs the
+      credential, `check` needs the installed tree, and the gate's use
+      removes the job's credential at its end.
     required: false
     default: check
   dir:
@@ -38,12 +48,28 @@ inputs:
     description: Extra arguments appended to the command, e.g. `--fail-on medium --baseline .securechain-baseline`.
     required: false
     default: ""
-  token:
+  portal-token:
     description: >-
-      TuxCare subscription token. Prefer setting TUXCARE_TOKEN in the job's env
-      from a repository secret; this input is an alternative, not a second copy.
+      TuxCare portal token, from a repository secret. Passed to the CLI as
+      SECURECHAIN_PORTAL_TOKEN: the one setting a run needs (doc 19 §1). It
+      also fetches the registry credential the project's own package manager
+      needs (doc 19 §9), through `registry-login` below.
+    required: true
+  registry-login:
+    description: >-
+      How the job gets the registry credential before the command runs:
+      `job-dir` (default) runs `securechain registry env --job-dir` into
+      $RUNNER_TEMP/securechain-job, which npm, pnpm, yarn classic, pip,
+      pipenv, pdm, uv and poetry read, and exports its variables; it also
+      writes a `${TUXCARE_TOKEN:-}` reference into ~/.yarnrc.yml for a yarn
+      berry project, and the token into bun's .npmrc for a bun project
+      whose bun.lock sends the key to no other host, whose lines the action's
+      last step removes (doc 99 Q91, Q93). `none` writes
+      and exports nothing, for a gate after a `command: registry` step, or a
+      tenant that has no registry credential yet (`check` needs none).
+      `none` with `command: registry` is refused.
     required: false
-    default: ""
+    default: job-dir
   sarif:
     description: For `check`, write SARIF and upload it to GitHub code scanning.
     required: false
@@ -81,16 +107,146 @@ runs:
         echo "$bin" >> "$GITHUB_PATH"
         "$bin/securechain" version
 
+    - name: Configure the registry credential
+      shell: bash
+      env:
+        SECURECHAIN_PORTAL_TOKEN: ${{ inputs.portal-token }}
+        REGISTRY_LOGIN: ${{ inputs.registry-login }}
+        COMMAND: ${{ inputs.command }}
+        DIR: ${{ inputs.dir }}
+      # The later steps of the customer's workflow (npm ci, pip install) read
+      # the credential from the job directory, which NPM_CONFIG_USERCONFIG
+      # and NETRC name; ~/.npmrc and ~/.netrc stay as they were (doc 03,
+      # "securechain registry"; doc 99 Q81, Q82). yarn berry and bun read
+      # neither variable: a berry project gets a ${TUXCARE_TOKEN:-} line in
+      # ~/.yarnrc.yml, and a bun project whose bun.lock sends the key to no
+      # other host gets it in bun's .npmrc, from which the last step removes
+      # the lines this step added (doc 99 Q91, Q93). set -e
+      # (also GitHub's own default for shell: bash) means a failed `registry
+      # env` or `registry login` stops the step here, so a portal failure
+      # never leaves this job with TUXCARE_TOKEN unset and $GITHUB_ENV
+      # untouched. `none` asks the portal for nothing: a tenant with no
+      # registry credential yet still gets its gate.
+      run: |
+        set -eu
+        case "$REGISTRY_LOGIN" in
+          job-dir) ;;
+          none)
+            if [ "$COMMAND" = registry ]; then
+              echo "::error::command: registry writes the registry credential, so registry-login cannot be 'none'"
+              exit 2
+            fi
+            echo "registry-login: none: no registry credential written or exported"
+            exit 0
+            ;;
+          *)
+            echo "::error::registry-login must be 'job-dir' or 'none', got: $REGISTRY_LOGIN"
+            exit 2
+            ;;
+        esac
+        jobdir="$RUNNER_TEMP/securechain-job"
+        securechain registry env --dir "$DIR" --job-dir "$jobdir" > "$RUNNER_TEMP/securechain.env"
+        # The whole line, split at its first '=': `IFS='=' read key value`
+        # drops a trailing '=' from the value, and a base64 token ends in one.
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          # A value of several lines, the text of a certificate, comes as
+          # <name><<SECURECHAIN_EOF_<hex>, its lines and the delimiter: the form
+          # $GITHUB_ENV takes. It is copied whole, and not masked: a
+          # certificate is no secret (doc 03, ruling B3).
+          head=${line%%<<*}
+          case "$line" in
+            *"<<SECURECHAIN_EOF_"*)
+              case "$head" in
+                *=*) ;;
+                *)
+                  delim=${line#*<<}
+                  printf '%s\n' "$line" >> "$GITHUB_ENV"
+                  while IFS= read -r body; do
+                    printf '%s\n' "$body" >> "$GITHUB_ENV"
+                    [ "$body" = "$delim" ] && break
+                  done
+                  continue
+                  ;;
+              esac
+              ;;
+          esac
+          key=${line%%=*}
+          value=${line#*=}
+          # true, false, null, an empty value and the noproxy host list are no
+          # secret, and a mask would hide each such word, or the registry's
+          # host, in the rest of the log: the variables that take the proxy,
+          # the certificate authority and the TLS check from the user's own
+          # settings (doc 03, rulings D-R61, N7 and D-R70). A proxy URL can carry
+          # a password, and is masked.
+          case "$value" in
+            ''|true|false|null) ;;
+            *)
+              case "$key" in
+                npm_config_noproxy) ;;
+                *) echo "::add-mask::$value" ;;
+              esac
+              ;;
+          esac
+          echo "$key=$value" >> "$GITHUB_ENV"
+        done < "$RUNNER_TEMP/securechain.env"
+        rm -f "$RUNNER_TEMP/securechain.env"
+        # yarn berry: .yarnrc.yml, or a yarn.lock of yarn 2 or later.
+        # --keep-source: this step never changes berry's source, because
+        # nothing puts ~/.yarnrc.yml back (ruling D-R2). --job-dir records the
+        # lines it adds to ~/.yarnrc.yml, as bun's step does, and the last
+        # step's `registry end` removes them: a reference one job left sent a
+        # later job's token through a project's proxy (doc 03, L2).
+        if [ -f "$DIR/.yarnrc.yml" ] || grep -qs '^__metadata:' "$DIR/yarn.lock"; then
+          securechain registry login --dir "$DIR" --reference --keep-source --ecosystem yarn-berry \
+            --job-dir "$jobdir" --job-process "$PPID"
+        fi
+        # bun: the login writes the key into bun's .npmrc for a project whose
+        # bun.lock sends it to no other host (doc 99 Q93, rulings D-R15 and
+        # D-R58). With --job-dir it records the lines it added beside that
+        # file, and first removes the lines of each job on this machine that
+        # ended without its last step, under a lock (ruling D-R67). $PPID is
+        # the runner's process for the job: each step is a shell of its own.
+        # The last step runs `registry end`, which removes this job's lines.
+        # A symbolic link is not written through: bun gets no credential, and
+        # the link stays as it was.
+        if [ -f "$DIR/bun.lock" ] || [ -f "$DIR/bun.lockb" ]; then
+          bunrc="${XDG_CONFIG_HOME:-$HOME}/.npmrc"
+          if [ -L "$bunrc" ]; then
+            echo "securechain: $bunrc is a symbolic link, and the CI step writes no credential through one: bun gets no registry credential (doc 03)"
+          else
+            rc=0
+            securechain registry login --dir "$DIR" --ecosystem bun --job-dir "$jobdir" --job-process "$PPID" \
+              > "$jobdir/bun-login.out" || rc=$?
+            cat "$jobdir/bun-login.out"
+            # command: registry runs no last step, so bun's key stays in the
+            # file until the gate's use of this action ends (doc 03).
+            if [ "$rc" -eq 0 ] && [ "$COMMAND" = registry ] && grep -q '^wrote .*, for bun$' "$jobdir/bun-login.out"; then
+              echo "::notice::securechain: bun's registry key is in $bunrc until the gate's use of this action ends and removes it. Run that use with if: always(); without it the key stays on the runner until a later job on this machine finds this job gone (doc 03)"
+            fi
+            rm -f "$jobdir/bun-login.out"
+            if [ "$rc" -ne 0 ]; then
+              exit "$rc"
+            fi
+          fi
+        fi
+
     - name: Run securechain ${{ inputs.command }}
       id: run
       shell: bash
       env:
-        SECURECHAIN_TOKEN_INPUT: ${{ inputs.token }}
+        SECURECHAIN_PORTAL_TOKEN: ${{ inputs.portal-token }}
       run: |
         set -u
-        if [ -n "$SECURECHAIN_TOKEN_INPUT" ]; then export TUXCARE_TOKEN="$SECURECHAIN_TOKEN_INPUT"; fi
         cmd='${{ inputs.command }}'
         dir='${{ inputs.dir }}'
+        if [ "$cmd" = registry ]; then
+          # The step before wrote the job directory and exported its variables
+          # for the job's install step. This mode runs no gate.
+          echo "securechain: the registry credential is configured; no gate ran (command: registry)"
+          echo "exit-code=0" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         sarif=''
         if [ "$cmd" = check ] && [ '${{ inputs.sarif }}' = true ]; then
           sarif="$RUNNER_TEMP/securechain.sarif"
@@ -118,3 +274,29 @@ runs:
       run: |
         echo "::error::securechain ${{ inputs.command }} exited ${{ steps.run.outputs.exit-code }} (1 = findings failed the gate; doc 03 has the table)"
         exit ${{ steps.run.outputs.exit-code }}
+
+    # The job directory holds the registry credential. $RUNNER_TEMP is
+    # emptied after each job, and this step removes the directory as well,
+    # in every use but `command: registry`, whose later steps still read it,
+    # and in that use too when it failed. It first removes the lines the
+    # credential steps added to bun's .npmrc, or the file the login created
+    # (doc 99 Q91, ruling D-R60). A composite action has no step of its own
+    # at the end of the job, so a workflow runs the gate's use with
+    # `if: always()`.
+    - name: Remove the job directory
+      if: always() && (inputs.command != 'registry' || failure())
+      shell: bash
+      run: |
+        set -u
+        jobdir="$RUNNER_TEMP/securechain-job"
+        # bun: `registry end` removes, one for one, the lines this job's
+        # credential steps added to bun's .npmrc, and those of each job on
+        # this machine that ended without its last step, under the lock the
+        # login takes (rulings D-R60 and D-R67). It asks the portal for
+        # nothing. A failure fails this step: the key would stay.
+        rc=0
+        if command -v securechain > /dev/null 2>&1; then
+          securechain registry end --job-dir "$jobdir" || rc=$?
+        fi
+        rm -rf "$jobdir"
+        exit "$rc"
