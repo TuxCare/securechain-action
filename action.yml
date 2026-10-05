@@ -11,7 +11,7 @@
 # "latest" is never used: a gate whose binary changes under a pipeline is not
 # a gate.
 #
-# This file is rendered by the release pipeline: v0.1.18 is the CLI
+# This file is rendered by the release pipeline: v0.1.19 is the CLI
 # release the wrapper was published with, and the wrapper's own tag is that
 # same version. Edit the source in the securechain-cli repository under
 # tools/release/github-action/, never this copy.
@@ -28,7 +28,7 @@ inputs:
       SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
       the default is the release this wrapper was published with.
     required: false
-    default: "v0.1.18"
+    default: "v0.1.19"
   command:
     description: >-
       The subcommand to run. `check` is the gate; `status` reads without
@@ -45,7 +45,11 @@ inputs:
     required: false
     default: "."
   args:
-    description: Extra arguments appended to the command, e.g. `--fail-on medium --baseline .securechain-baseline`.
+    description: >-
+      Extra arguments appended to the command, separated by spaces, e.g.
+      `--fail-on medium --baseline .securechain-baseline`. The value reaches
+      the step as an environment variable and is split on spaces; quoting is
+      not interpreted, so a value can hold no argument with a space in it.
     required: false
     default: ""
   portal-token:
@@ -92,9 +96,11 @@ runs:
   steps:
     - name: Install securechain ${{ inputs.version }}
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
         set -eu
-        ver='${{ inputs.version }}'
+        ver="$VERSION"
         case "$ver" in v[0-9]*) ;; *) echo "::error::version must look like v1.2.3, got: $ver"; exit 2 ;; esac
         base="https://securechain.tuxcare.com/get"
         bin="$RUNNER_TEMP/securechain-bin"
@@ -114,6 +120,9 @@ runs:
         REGISTRY_LOGIN: ${{ inputs.registry-login }}
         COMMAND: ${{ inputs.command }}
         DIR: ${{ inputs.dir }}
+      # Every input reaches a run: script through the environment, never as
+      # text the shell then parses: a value holding ', $, ;, &, |, () or a
+      # backtick would otherwise run as shell code (doc 10).
       # The later steps of the customer's workflow (npm ci, pip install) read
       # the credential from the job directory, which NPM_CONFIG_USERCONFIG
       # and NETRC name; ~/.npmrc and ~/.netrc stay as they were (doc 03,
@@ -236,10 +245,14 @@ runs:
       shell: bash
       env:
         SECURECHAIN_PORTAL_TOKEN: ${{ inputs.portal-token }}
+        COMMAND: ${{ inputs.command }}
+        DIR: ${{ inputs.dir }}
+        SARIF: ${{ inputs.sarif }}
+        ARGS: ${{ inputs.args }}
       run: |
         set -u
-        cmd='${{ inputs.command }}'
-        dir='${{ inputs.dir }}'
+        cmd="$COMMAND"
+        dir="$DIR"
         if [ "$cmd" = registry ]; then
           # The step before wrote the job directory and exported its variables
           # for the job's install step. This mode runs no gate.
@@ -247,16 +260,22 @@ runs:
           echo "exit-code=0" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        # args is a word list, not shell: set -f keeps a * from globbing, and
+        # a split of the variable runs no substitution its text carries. A
+        # quote in it groups nothing.
+        set -f
+        set -- $ARGS
+        set +f
         sarif=''
-        if [ "$cmd" = check ] && [ '${{ inputs.sarif }}' = true ]; then
+        if [ "$cmd" = check ] && [ "$SARIF" = true ]; then
           sarif="$RUNNER_TEMP/securechain.sarif"
           # SARIF to the file, the human report to the log: two runs would
           # double the time, so the log gets the machine document's summary.
-          securechain check --dir "$dir" --output sarif ${{ inputs.args }} > "$sarif"; rc=$?
+          securechain check --dir "$dir" --output sarif "$@" > "$sarif"; rc=$?
           echo "sarif-file=$sarif" >> "$GITHUB_OUTPUT"
           echo "securechain check exited $rc; SARIF at $sarif"
         else
-          securechain "$cmd" --dir "$dir" ${{ inputs.args }}; rc=$?
+          securechain "$cmd" --dir "$dir" "$@"; rc=$?
         fi
         echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
         exit 0
@@ -271,9 +290,12 @@ runs:
     - name: Fail on findings
       if: inputs.fail-on-findings == 'true' && steps.run.outputs.exit-code != '0'
       shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        EXIT_CODE: ${{ steps.run.outputs.exit-code }}
       run: |
-        echo "::error::securechain ${{ inputs.command }} exited ${{ steps.run.outputs.exit-code }} (1 = findings failed the gate; doc 03 has the table)"
-        exit ${{ steps.run.outputs.exit-code }}
+        echo "::error::securechain $COMMAND exited $EXIT_CODE (1 = findings failed the gate; doc 03 has the table)"
+        exit "$EXIT_CODE"
 
     # The job directory holds the registry credential. $RUNNER_TEMP is
     # emptied after each job, and this step removes the directory as well,

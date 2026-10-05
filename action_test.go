@@ -189,22 +189,15 @@ func cleanupScript(t *testing.T) string {
 }
 
 // runStepScript extracts the run: block of the step whose id is "run", the
-// one that runs the command, and renders its `${{ inputs.<name> }}`
-// expressions the way GitHub does before a shell sees the text.
-func runStepScript(t *testing.T, inputs map[string]string) string {
+// one that runs the command. Its inputs reach it through the step's env:
+// the tests set j.vars.
+func runStepScript(t *testing.T) string {
 	t.Helper()
 	for _, s := range actionSteps(t).Runs.Steps {
 		if s.ID != "run" {
 			continue
 		}
-		script := s.Run
-		for k, v := range inputs {
-			script = strings.ReplaceAll(script, "${{ inputs."+k+" }}", v)
-		}
-		if strings.Contains(script, "${{") {
-			t.Fatalf("the run step has an expression this test did not render:\n%s", script)
-		}
-		return script
+		return s.Run
 	}
 	t.Fatal(`action.yml has no step with id "run"`)
 	return ""
@@ -322,6 +315,8 @@ func newJob(t *testing.T, srv *portaltest.Server, login, command string) *job {
 		"REGISTRY_LOGIN":           login,
 		"COMMAND":                  command,
 		"DIR":                      ".",
+		"SARIF":                    "true",
+		"ARGS":                     "",
 		"RUNNER_TEMP":              j.runnerTemp,
 		"GITHUB_ENV":               j.githubEnv,
 		"GITHUB_OUTPUT":            j.githubOutput,
@@ -773,9 +768,7 @@ func TestActionCommandRegistryExportsTheCredentialAndRunsNoGate(t *testing.T) {
 	}
 	before := len(srv.Requests())
 
-	stdout, stderr, err := j.run(t, bin, runStepScript(t, map[string]string{
-		"command": "registry", "dir": ".", "sarif": "true", "args": "",
-	}), project)
+	stdout, stderr, err := j.run(t, bin, runStepScript(t), project)
 	if err != nil {
 		t.Fatalf("the run step failed: %v\n%s%s", err, stdout, stderr)
 	}
@@ -1251,5 +1244,58 @@ func TestTheLastStepCleansTheFileOfEachLoginOfTheJob(t *testing.T) {
 		if !strings.Contains(stdout, f) {
 			t.Errorf("the last step does not name %s:\n%s", f, stdout)
 		}
+	}
+}
+
+// Moved from the portal's tasks/todo.md on 5 October 2026: `args` and the
+// other inputs went into a run: block as text, so a value holding ', $, ;,
+// &, |, () or a backtick ran as shell code. Every input now reaches its step
+// through env:, and no run: block holds an expression.
+func TestNoRunBlockInterpolatesAnExpression(t *testing.T) {
+	for _, s := range actionSteps(t).Runs.Steps {
+		if s.Run == "" {
+			continue
+		}
+		if strings.Contains(s.Run, "${{") {
+			t.Errorf("the %q step's run: block interpolates %q", s.Name, s.Run)
+		}
+	}
+}
+
+// The same item, measured through the run step: an args value with every
+// shell metacharacter reaches the binary as argument words, and runs
+// nothing. The first word of each command line is "check", so the fake
+// securechain records its argv one word a line.
+func TestTheArgsInputIsSplitOnSpacesAndRunsNoShell(t *testing.T) {
+	bin := securechainBinaryOrSkip(t)
+	j := newJob(t, fakePortal(t), "none", "check")
+	j.vars["SARIF"] = "false"
+	dir := t.TempDir()
+	mark := filepath.Join(dir, "pwned")
+	wrapDir := t.TempDir()
+	wrapper := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LOG\"\n"
+	if err := os.WriteFile(filepath.Join(wrapDir, "securechain"), []byte(wrapper), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	j.vars["PATH"] = wrapDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	j.vars["LOG"] = filepath.Join(dir, "argv")
+	j.vars["ARGS"] = "--fail-on medium ;touch " + mark + "1 `touch " + mark + "2` $(touch " + mark + "3) --baseline 'b c'"
+	stdout, stderr, err := j.run(t, bin, runStepScript(t), npmProject(t))
+	if err != nil {
+		t.Fatalf("the run step failed: %v\n%s%s", err, stdout, stderr)
+	}
+	for _, suffix := range []string{"1", "2", "3"} {
+		if _, err := os.Stat(mark + suffix); !os.IsNotExist(err) {
+			t.Errorf("args ran shell: %s exists", mark+suffix)
+		}
+	}
+	b, err := os.ReadFile(j.vars["LOG"])
+	if err != nil {
+		t.Fatalf("the run step ran no securechain: %v", err)
+	}
+	want := "check\n--dir\n.\n--fail-on\nmedium\n;touch\n" + mark + "1\n`touch\n" +
+		mark + "2`\n$(touch\n" + mark + "3)\n--baseline\n'b\nc'\n"
+	if string(b) != want {
+		t.Errorf("securechain's argv was\n%s\nwant\n%s", b, want)
 	}
 }
