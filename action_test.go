@@ -1100,7 +1100,7 @@ func TestAJobKilledBeforeItsEndLeavesNoTokenAfterTheNextJob(t *testing.T) {
 			if err != nil {
 				t.Fatalf("the next job's credential step failed: %v\n%s%s", err, stdout, stderr)
 			}
-			if !strings.Contains(stdout, "left when it ended without its last step") {
+			if !strings.Contains(stdout, "That job ended before its last step could remove them") {
 				t.Errorf("the step does not name the dead job's lines it removed:\n%s", stdout)
 			}
 			if b, _ := os.ReadFile(bunrc); !strings.Contains(string(b), registrySecret) {
