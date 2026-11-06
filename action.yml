@@ -11,7 +11,7 @@
 # "latest" is never used: a gate whose binary changes under a pipeline is not
 # a gate.
 #
-# This file is rendered by the release pipeline: v0.1.80 is the CLI
+# This file is rendered by the release pipeline: v0.1.81 is the CLI
 # release the wrapper was published with, and the wrapper's own tag is that
 # same version. Edit the source in the securechain-cli repository under
 # tools/release/github-action/, never this copy.
@@ -28,7 +28,7 @@ inputs:
       SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
       the default is the release this wrapper was published with.
     required: false
-    default: "v0.1.80"
+    default: "v0.1.81"
   command:
     description: >-
       The subcommand to run. `check` is the gate; `status` reads without
@@ -55,10 +55,22 @@ inputs:
   portal-token:
     description: >-
       TuxCare portal token, from a repository secret. Passed to the CLI as
-      SECURECHAIN_PORTAL_TOKEN: the one setting a run needs (doc 19 §1). It
-      also fetches the registry credential the project's own package manager
-      needs (doc 19 §9), through `registry-login` below.
-    required: true
+      SECURECHAIN_PORTAL_TOKEN (doc 19 §1). It also fetches the registry
+      credential the project's own package manager needs (doc 19 §9),
+      through `registry-login` below. Optional: with no portal token and a
+      `portal-url`, the CLI signs in with the OIDC token of the job (doc 19
+      §1, "The CI sign-in"). The job then needs `permissions: id-token:
+      write`, and a trust rule of the workspace names the repository.
+    required: false
+    default: ""
+  portal-url:
+    description: >-
+      The address of your workspace, for example https://acme.example.com.
+      Passed to the CLI as SECURECHAIN_PORTAL_URL. The CI sign-in needs it:
+      it is the audience of the OIDC token. Empty: the CLI's own default,
+      or a SECURECHAIN_PORTAL_URL that the job sets.
+    required: false
+    default: ""
   registry-login:
     description: >-
       How the job gets the registry credential before the command runs:
@@ -116,7 +128,8 @@ runs:
     - name: Configure the registry credential
       shell: bash
       env:
-        SECURECHAIN_PORTAL_TOKEN: ${{ inputs.portal-token }}
+        PORTAL_TOKEN: ${{ inputs.portal-token }}
+        PORTAL_URL: ${{ inputs.portal-url }}
         REGISTRY_LOGIN: ${{ inputs.registry-login }}
         COMMAND: ${{ inputs.command }}
         DIR: ${{ inputs.dir }}
@@ -138,6 +151,17 @@ runs:
       # registry credential yet still gets its gate.
       run: |
         set -eu
+        # The portal inputs, when they are not empty. An empty input leaves
+        # a variable of the job's own env: as it was. With no portal token,
+        # the CLI signs in with the OIDC token of the job (doc 19 §1, "The
+        # CI sign-in"): GitHub sets ACTIONS_ID_TOKEN_REQUEST_URL and
+        # ACTIONS_ID_TOKEN_REQUEST_TOKEN in each step of a job with
+        # id-token: write, and the portal URL is the audience. PORTAL_TOKEN
+        # goes: the CLI removes SECURECHAIN_PORTAL_TOKEN from each program
+        # it starts, and knows no other name (doc 10).
+        if [ -n "${PORTAL_TOKEN:-}" ]; then export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
+        unset PORTAL_TOKEN
+        if [ -n "${PORTAL_URL:-}" ]; then export SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
         case "$REGISTRY_LOGIN" in
           job-dir) ;;
           none)
@@ -244,13 +268,19 @@ runs:
       id: run
       shell: bash
       env:
-        SECURECHAIN_PORTAL_TOKEN: ${{ inputs.portal-token }}
+        PORTAL_TOKEN: ${{ inputs.portal-token }}
+        PORTAL_URL: ${{ inputs.portal-url }}
         COMMAND: ${{ inputs.command }}
         DIR: ${{ inputs.dir }}
         SARIF: ${{ inputs.sarif }}
         ARGS: ${{ inputs.args }}
       run: |
         set -u
+        # The portal inputs, as in the credential step: the CI sign-in when
+        # no portal token is given (doc 19 §1, "The CI sign-in").
+        if [ -n "${PORTAL_TOKEN:-}" ]; then export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
+        unset PORTAL_TOKEN
+        if [ -n "${PORTAL_URL:-}" ]; then export SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
         cmd="$COMMAND"
         dir="$DIR"
         if [ "$cmd" = registry ]; then

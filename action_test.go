@@ -266,9 +266,10 @@ func fakePortalWithToken(t *testing.T, token string) *portaltest.Server {
 }
 
 // hermeticEnv is a process environment with every SECURECHAIN_*, TUXCARE_*,
-// GITHUB_*, RUNNER_* variable and every CI marker (internal/client/auth.
-// CIMarkers) removed, so an ambient build agent or a developer's own login
-// cannot leak into what the script sees. extra is then added on top.
+// GITHUB_*, RUNNER_*, ACTIONS_* variable, the two portal inputs, and every
+// CI marker (internal/client/auth.CIMarkers) removed, so an ambient build
+// agent or a developer's own login cannot leak into what the script sees.
+// extra is then added on top.
 func hermeticEnv(bin string, extra map[string]string) []string {
 	// The npm and netrc variables name the files registry env copies, and
 	// XDG_CONFIG_HOME where bun reads; on a developer's machine or a CI
@@ -283,7 +284,8 @@ func hermeticEnv(bin string, extra map[string]string) []string {
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		if drop[k] || toolVariable(k) || strings.HasPrefix(k, "SECURECHAIN_") || strings.HasPrefix(k, "TUXCARE_") ||
-			strings.HasPrefix(k, "GITHUB_") || strings.HasPrefix(k, "RUNNER_") {
+			strings.HasPrefix(k, "GITHUB_") || strings.HasPrefix(k, "RUNNER_") || strings.HasPrefix(k, "ACTIONS_") ||
+			k == "PORTAL_URL" || k == "PORTAL_TOKEN" {
 			continue
 		}
 		env = append(env, kv)
@@ -308,18 +310,20 @@ func newJob(t *testing.T, srv *portaltest.Server, login, command string) *job {
 	j.githubEnv = filepath.Join(t.TempDir(), "github_env")
 	j.githubOutput = filepath.Join(t.TempDir(), "github_output")
 	j.vars = map[string]string{
-		"HOME":                     j.home,
-		"SECURECHAIN_CACHE":        t.TempDir(),
-		"SECURECHAIN_PORTAL_URL":   srv.URL,
-		"SECURECHAIN_PORTAL_TOKEN": "sctest_faketoken",
-		"REGISTRY_LOGIN":           login,
-		"COMMAND":                  command,
-		"DIR":                      ".",
-		"SARIF":                    "true",
-		"ARGS":                     "",
-		"RUNNER_TEMP":              j.runnerTemp,
-		"GITHUB_ENV":               j.githubEnv,
-		"GITHUB_OUTPUT":            j.githubOutput,
+		"HOME":              j.home,
+		"SECURECHAIN_CACHE": t.TempDir(),
+		// The inputs portal-url and portal-token, as the steps' env: blocks
+		// pass them.
+		"PORTAL_URL":     srv.URL,
+		"PORTAL_TOKEN":   "sctest_faketoken",
+		"REGISTRY_LOGIN": login,
+		"COMMAND":        command,
+		"DIR":            ".",
+		"SARIF":          "true",
+		"ARGS":           "",
+		"RUNNER_TEMP":    j.runnerTemp,
+		"GITHUB_ENV":     j.githubEnv,
+		"GITHUB_OUTPUT":  j.githubOutput,
 	}
 	return j
 }

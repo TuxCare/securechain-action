@@ -7,7 +7,7 @@ This repository holds no CLI source. The action downloads the released binary
 for a **pinned** version through the same install script every customer uses,
 verifies its checksum against the release's `checksums.txt` before anything
 runs, then runs `securechain check`. The default version is the release this
-action was published with: `v0.1.80`.
+action was published with: `v0.1.81`.
 
 With `command: registry` the action writes the registry credential into a
 directory for the job, for the job's own install step, and runs no gate. A
@@ -44,7 +44,61 @@ jobs:
           registry-login: none
 ```
 
-`@v0` follows the newest release of the 0.x line; `@v0.1.80` pins one
+### Sign in with the OIDC token of the job
+
+The job can sign in with its OIDC token in place of a stored portal token,
+so that the repository keeps no portal token in a secret (doc 19 §1, "The
+CI sign-in"). Give the job the permission `id-token: write`, give the action
+`portal-url` (the address of your workspace, with no slash at the end), and
+leave out `portal-token`. The CLI asks the token service of the runner for a
+token with the portal URL as its audience, and the portal trades it for a
+portal token of one hour at most. A trust rule of the workspace must name the
+repository (Settings › CI sign-in in the portal).
+
+```yaml
+on: [push, pull_request]
+permissions:
+  contents: read
+  id-token: write          # for the CI sign-in
+  security-events: write   # for the SARIF upload
+jobs:
+  securechain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: TuxCare/securechain-action@v0
+        with:
+          command: registry
+          portal-url: https://acme.example.com
+      - run: |
+          # GitHub gives these two to each step of a job with id-token:
+          # write; with them, an install script gets a portal token.
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          npm ci
+      - uses: TuxCare/securechain-action@v0
+        if: always()
+        with:
+          portal-url: https://acme.example.com
+          registry-login: none
+```
+
+GitHub gives `ACTIONS_ID_TOKEN_REQUEST_TOKEN` and
+`ACTIONS_ID_TOKEN_REQUEST_URL` to each step of a job with `id-token: write`.
+With them, any program of the step can ask for an OIDC token for the portal,
+and trade it for a portal token: the install scripts of your dependencies
+too. The CLI removes them from each program that it starts (doc 10), but a
+step of your own is not the CLI's. So remove them in each step that runs
+code of your dependencies (the install, a build, the tests), as the example
+does, or keep the SecureChain steps in a job of their own and give
+`id-token: write` to that job only.
+
+With `portal-token` set, the CLI uses that token, and does not sign in. A
+job that has `id-token: write` for another service and keeps its portal
+token in a secret changes nothing.
+
+`@v0` follows the newest release of the 0.x line; `@v0.1.81` pins one
 release of the action, which pins one release of the CLI.
 
 Before the command, the action runs `securechain registry env --job-dir` into
@@ -85,11 +139,12 @@ its home directory, and bun's `.npmrc` with it.
 
 | input | default | meaning |
 |---|---|---|
-| `version` | `v0.1.80` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
+| `version` | `v0.1.81` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
 | `command` | `check` | `check` is the gate; `status` reads without gating; `registry` writes the job directory for a later install step and runs no gate |
 | `dir` | `.` | project root |
 | `args` | | extra arguments, e.g. `--fail-on medium --baseline .securechain-baseline` |
-| `portal-token` | (required) | TuxCare portal token, passed to the CLI as `SECURECHAIN_PORTAL_TOKEN` |
+| `portal-token` | | TuxCare portal token, passed to the CLI as `SECURECHAIN_PORTAL_TOKEN`. Leave it out for the CI sign-in (above) |
+| `portal-url` | | the address of your workspace, passed to the CLI as `SECURECHAIN_PORTAL_URL`; the CI sign-in needs it. Empty: the CLI's default portal, or the `SECURECHAIN_PORTAL_URL` of the job |
 | `registry-login` | `job-dir` | `job-dir` writes the job directory and exports its variables, and gives a berry or a bun project its own step; `none` writes and exports nothing, and is refused with `command: registry`. `reference` and `plain`, the routes until 28 September 2026, are refused |
 | `sarif` | `true` | for `check`: write SARIF and upload it to code scanning |
 | `fail-on-findings` | `true` | fail the step when the command exits non-zero |
