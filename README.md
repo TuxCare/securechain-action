@@ -7,7 +7,7 @@ This repository holds no CLI source. The action downloads the released binary
 for a **pinned** version through the same install script every customer uses,
 verifies its checksum against the release's `checksums.txt` before anything
 runs, then runs `securechain check`. The default version is the release this
-action was published with: `v0.1.83`.
+action was published with: `v0.1.84`.
 
 With `command: registry` the action writes the registry credential into a
 directory for the job, for the job's own install step, and runs no gate. A
@@ -98,7 +98,7 @@ With `portal-token` set, the CLI uses that token, and does not sign in. A
 job that has `id-token: write` for another service and keeps its portal
 token in a secret changes nothing.
 
-`@v0` follows the newest release of the 0.x line; `@v0.1.83` pins one
+`@v0` follows the newest release of the 0.x line; `@v0.1.84` pins one
 release of the action, which pins one release of the CLI.
 
 Before the command, the action runs `securechain registry env --job-dir` into
@@ -139,7 +139,7 @@ its home directory, and bun's `.npmrc` with it.
 
 | input | default | meaning |
 |---|---|---|
-| `version` | `v0.1.83` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
+| `version` | `v0.1.84` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
 | `command` | `check` | `check` is the gate; `status` reads without gating; `registry` writes the job directory for a later install step and runs no gate |
 | `dir` | `.` | project root |
 | `args` | | extra arguments, e.g. `--fail-on medium --baseline .securechain-baseline` |
