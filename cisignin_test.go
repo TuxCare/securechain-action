@@ -167,6 +167,14 @@ func TestTheRunStepGivesTheCLIThePortalInputs(t *testing.T) {
 		{"no input keeps a job variable of the new name", map[string]string{"PORTAL_TOKEN": "", "PORTAL_URL": "",
 			"TUXCARE_PORTAL_TOKEN": jobToken},
 			"token=unset url=unset tux=" + jobToken + " tuxurl=unset input=unset"},
+		// SC-3522: the input token goes as SECURECHAIN_PORTAL_TOKEN only, and
+		// the step does not copy a TUXCARE_PORTAL_URL of the job to the old
+		// name: a CLI pinned before the rename reads the old name only, and
+		// would send the token to that host (review 2). The CLI of this
+		// release stops such a job at exit 5 and names portal-url.
+		{"a portal-token input leaves a job URL of the new name alone", map[string]string{"PORTAL_TOKEN": "sctest_faketoken", "PORTAL_URL": "",
+			"TUXCARE_PORTAL_URL": jobURL},
+			"token=sctest_faketoken url=unset tux=unset tuxurl=" + jobURL + " input=unset"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j := newJob(t, fakePortal(t), "none", "check")
@@ -289,5 +297,21 @@ func TestTheActionNeverGivesTheTokenANameThatAnOldCLIKeeps(t *testing.T) {
 	want := `if [ -n "${PORTAL_TOKEN:-}" ]; then unset TUXCARE_PORTAL_TOKEN; export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi`
 	if n := strings.Count(string(data), want); n != 2 {
 		t.Errorf("action.yml has %d steps that take the portal token by the rule, want 2 (the credential step and the run step)", n)
+	}
+	// SC-3522, review 2: both steps give the URL only from the portal-url
+	// input, and copy no TUXCARE_PORTAL_URL of the job to the old name. A
+	// CLI pinned before the rename reads the old name only, and would send
+	// the input token to that host.
+	wantURL := `if [ -n "${PORTAL_URL:-}" ]; then export TUXCARE_PORTAL_URL="$PORTAL_URL" SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi`
+	if n := strings.Count(string(data), wantURL); n != 2 {
+		t.Errorf("action.yml has %d steps that take the portal URL by the rule, want 2 (the credential step and the run step)", n)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "PORTAL_URL=") && strings.Contains(line, "TUXCARE_PORTAL_URL\"") && !strings.Contains(line, "$PORTAL_URL\"") {
+			t.Errorf("action.yml:%d copies a URL of the job: %s", i+1, strings.TrimSpace(line))
+		}
+		if strings.Contains(line, `SECURECHAIN_PORTAL_URL="$TUXCARE_PORTAL_URL"`) || strings.Contains(line, `SECURECHAIN_PORTAL_URL="${TUXCARE_PORTAL_URL`) {
+			t.Errorf("action.yml:%d copies TUXCARE_PORTAL_URL to the old name: %s", i+1, strings.TrimSpace(line))
+		}
 	}
 }

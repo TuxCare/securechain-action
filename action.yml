@@ -11,7 +11,7 @@
 # "latest" is never used: a gate whose binary changes under a pipeline is not
 # a gate.
 #
-# This file is rendered by the release pipeline: v0.1.93 is the CLI
+# This file is rendered by the release pipeline: v0.1.94 is the CLI
 # release the wrapper was published with, and the wrapper's own tag is that
 # same version. Edit the source in the securechain-cli repository under
 # tools/release/github-action/, never this copy.
@@ -28,7 +28,7 @@ inputs:
       SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
       the default is the release this wrapper was published with.
     required: false
-    default: "v0.1.93"
+    default: "v0.1.94"
   command:
     description: >-
       The subcommand to run. `check` is the gate; `status` reads without
@@ -70,6 +70,11 @@ inputs:
       Passed to the CLI as TUXCARE_PORTAL_URL and SECURECHAIN_PORTAL_URL. The CI sign-in needs it:
       it is the audience of the OIDC token. Empty: the CLI's own default,
       or a TUXCARE_PORTAL_URL (or SECURECHAIN_PORTAL_URL) that the job sets.
+      With portal-token, give the URL here: the token goes as
+      SECURECHAIN_PORTAL_TOKEN, and a CLI release that holds SC-3522 stops
+      at exit 5 when the job sets the URL only as TUXCARE_PORTAL_URL.
+      v0.1.93 sends the token to that URL, and a release before the rename
+      sends it to its default portal.
     required: false
     default: ""
   registry-login:

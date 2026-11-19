@@ -12,7 +12,7 @@ This repository holds no CLI source. The action downloads the released binary
 for a **pinned** version through the same install script every customer uses,
 verifies its checksum against the release's `checksums.txt` before anything
 runs, then runs `securechain check`. The default version is the release this
-action was published with: `v0.1.93`.
+action was published with: `v0.1.94`.
 
 With `command: registry` the action writes the registry credential into a
 directory for the job, for the job's own install step, and runs no gate. A
@@ -104,7 +104,7 @@ job that has `id-token: write` for another service and keeps its portal
 token in a secret changes nothing.
 
 `@v0` follows the promoted release of the 0.x line: a new release reaches
-`@v0` after a soak of 48 hours. `@v0.1.93` pins one release of the
+`@v0` after a soak of 48 hours. `@v0.1.94` pins one release of the
 action, which pins one release of the CLI, and a pin can name a new release
 on the day of its tag.
 
@@ -146,12 +146,12 @@ its home directory, and bun's `.npmrc` with it.
 
 | input | default | meaning |
 |---|---|---|
-| `version` | `v0.1.93` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
+| `version` | `v0.1.94` | CLI release to run, `vX.Y.Z`. Checksum-verified. |
 | `command` | `check` | `check` is the gate; `status` reads without gating; `registry` writes the job directory for a later install step and runs no gate |
 | `dir` | `.` | project root |
 | `args` | | extra arguments, e.g. `--fail-on medium --baseline .securechain-baseline` |
 | `portal-token` | | TuxCare portal token, passed to the CLI as `SECURECHAIN_PORTAL_TOKEN`, the name that each CLI version reads and keeps from the programs it starts; a `TUXCARE_PORTAL_TOKEN` of the job is unset. Leave it out for the CI sign-in (above) |
-| `portal-url` | | the address of your workspace, passed to the CLI as `TUXCARE_PORTAL_URL` and `SECURECHAIN_PORTAL_URL`; the CI sign-in needs it. Empty: the CLI's default portal, or the `TUXCARE_PORTAL_URL` (else `SECURECHAIN_PORTAL_URL`) of the job |
+| `portal-url` | | the address of your workspace, passed to the CLI as `TUXCARE_PORTAL_URL` and `SECURECHAIN_PORTAL_URL`; the CI sign-in needs it. Empty: the CLI's default portal, or the `TUXCARE_PORTAL_URL` (else `SECURECHAIN_PORTAL_URL`) of the job. With `portal-token`, give the URL here: the token goes as `SECURECHAIN_PORTAL_TOKEN`, and a CLI release that holds SC-3522 stops at exit 5 when the job sets the URL only as `TUXCARE_PORTAL_URL` (v0.1.93 sends the token to that URL, and a release before the rename sends it to its default portal) |
 | `registry-login` | `job-dir` | `job-dir` writes the job directory and exports its variables, and gives a berry or a bun project its own step; `none` writes and exports nothing, and is refused with `command: registry`. `reference` and `plain`, the routes until 28 September 2026, are refused |
 | `sarif` | `true` | for `check`: write SARIF and upload it to code scanning |
 | `fail-on-findings` | `true` | fail the step when the command exits non-zero |
