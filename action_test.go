@@ -86,7 +86,7 @@ func buildAndRun(m *testing.M) int {
 	return m.Run()
 }
 
-// fakeTools answer `--version` and nothing else. `registry login` in an
+// fakeTools answer `--version` (fakeToolScript) and nothing else. `registry login` in an
 // npm project detects npm, and the detection runs `npm --version`. Found in
 // CI on 28 September 2026 (pipeline 36805): golang:1.26.6 has no npm, and
 // each test that ran `registry login` in an npm project failed with "tool is
@@ -97,14 +97,26 @@ func buildAndRun(m *testing.M) int {
 // machine runs the same ones. The versions are the ones doc 07 measured;
 // yarn is the yarn classic these tests were written beside, which also
 // decides always-auth (ruling D-R11).
-var fakeTools = map[string]string{"npm": "11.19.0", "bun": "1.3.14", "yarn": "1.22.22"}
+//
+// pnpm is here too (SC-3372): registry env asks the pnpm on the PATH for its
+// version (pnpmVersionIn of internal/cli), and pnpm 12 reads an npmrc with a
+// reader of its own (pnpmfacts.ReadsConfigNatively). registrySecret holds a
+// quote, which that reader reads apart, so on a machine with pnpm 12 the
+// second credential step stopped with exit 5, and CI, with no pnpm, passed.
+// 11.21.0 is a version that pnpmfacts measured; it reads the npmrc as the CLI
+// reads it with no pnpm on the PATH.
+var fakeTools = map[string]string{"npm": "11.19.0", "pnpm": "11.21.0", "bun": "1.3.14", "yarn": "1.22.22"}
 
+// fakeToolScript answers `--version`, and `--version --ignore-workspace`:
+// the CLI reads the version of pnpm with that flag
+// (readPnpmRunningVersion of internal/ecosystem/javascript), and a fake that
+// refused it gave the CLI no version at all (review 1 of SC-3372).
 const fakeToolScript = `#!/bin/sh
-if [ "$#" -eq 1 ] && [ "$1" = --version ]; then
+if [ "$1" = --version ] && { [ "$#" -eq 1 ] || { [ "$#" -eq 2 ] && [ "$2" = --ignore-workspace ]; }; }; then
 	echo %s
 	exit 0
 fi
-echo "the fake %s of this test answers only --version, not: $*" >&2
+echo "the fake %s of this test answers only --version (also with --ignore-workspace), not: $*" >&2
 exit 97
 `
 

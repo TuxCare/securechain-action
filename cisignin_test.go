@@ -137,8 +137,13 @@ func TestWithNoPortalTokenTheCredentialStepSignsInWithTheOIDCTokenOfTheJob(t *te
 
 // What the CLI gets from the portal inputs in the run step. An input that is
 // empty leaves the job's own variable as it was, and the input's own
-// variable never reaches the CLI: the CLI removes SECURECHAIN_PORTAL_TOKEN
-// from the programs that it starts, and no other name (doc 10).
+// variable never reaches the CLI: the CLI removes TUXCARE_PORTAL_TOKEN and
+// SECURECHAIN_PORTAL_TOKEN from the programs that it starts, and no other
+// name (doc 10). The token goes as SECURECHAIN_PORTAL_TOKEN only (SC-2799,
+// review 1): a pinned version before the rename removes only that name from
+// its programs, so a TUXCARE_PORTAL_TOKEN would reach them. The input unsets
+// a TUXCARE_PORTAL_TOKEN of the job, so it wins for a CLI that reads
+// TUXCARE_<X> first (SC-2796). The URL is no secret and goes in both names.
 func TestTheRunStepGivesTheCLIThePortalInputs(t *testing.T) {
 	bin := securechainBinaryOrSkip(t)
 	const jobToken, jobURL = "sctest_jobtoken", "https://job.example.test"
@@ -148,14 +153,20 @@ func TestTheRunStepGivesTheCLIThePortalInputs(t *testing.T) {
 		want string
 	}{
 		{"portal-token and portal-url", map[string]string{"PORTAL_TOKEN": "sctest_faketoken", "PORTAL_URL": "https://acme.example.com"},
-			"token=sctest_faketoken url=https://acme.example.com input=unset"},
+			"token=sctest_faketoken url=https://acme.example.com tux=unset tuxurl=https://acme.example.com input=unset"},
 		{"portal-url alone: the CI sign-in", map[string]string{"PORTAL_URL": "https://acme.example.com"},
-			"token=unset url=https://acme.example.com input=unset"},
+			"token=unset url=https://acme.example.com tux=unset tuxurl=https://acme.example.com input=unset"},
 		{"empty inputs, as the runner passes an input not given", map[string]string{"PORTAL_TOKEN": "", "PORTAL_URL": ""},
-			"token=unset url=unset input=unset"},
+			"token=unset url=unset tux=unset tuxurl=unset input=unset"},
 		{"empty inputs keep the job's own variables", map[string]string{"PORTAL_TOKEN": "", "PORTAL_URL": "",
 			"SECURECHAIN_PORTAL_TOKEN": jobToken, "SECURECHAIN_PORTAL_URL": jobURL},
-			"token=" + jobToken + " url=" + jobURL + " input=unset"},
+			"token=" + jobToken + " url=" + jobURL + " tux=unset tuxurl=unset input=unset"},
+		{"an input wins over a job variable of the new name", map[string]string{"PORTAL_TOKEN": "sctest_faketoken", "PORTAL_URL": "https://acme.example.com",
+			"TUXCARE_PORTAL_TOKEN": jobToken, "TUXCARE_PORTAL_URL": jobURL},
+			"token=sctest_faketoken url=https://acme.example.com tux=unset tuxurl=https://acme.example.com input=unset"},
+		{"no input keeps a job variable of the new name", map[string]string{"PORTAL_TOKEN": "", "PORTAL_URL": "",
+			"TUXCARE_PORTAL_TOKEN": jobToken},
+			"token=unset url=unset tux=" + jobToken + " tuxurl=unset input=unset"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j := newJob(t, fakePortal(t), "none", "check")
@@ -167,7 +178,7 @@ func TestTheRunStepGivesTheCLIThePortalInputs(t *testing.T) {
 			j.vars["SARIF"] = "false"
 			dir := t.TempDir()
 			wrapDir := t.TempDir()
-			wrapper := "#!/bin/sh\necho \"token=${SECURECHAIN_PORTAL_TOKEN-unset} url=${SECURECHAIN_PORTAL_URL-unset} input=${PORTAL_TOKEN-unset}\" > \"$LOG\"\n"
+			wrapper := "#!/bin/sh\necho \"token=${SECURECHAIN_PORTAL_TOKEN-unset} url=${SECURECHAIN_PORTAL_URL-unset} tux=${TUXCARE_PORTAL_TOKEN-unset} tuxurl=${TUXCARE_PORTAL_URL-unset} input=${PORTAL_TOKEN-unset}\" > \"$LOG\"\n"
 			if err := os.WriteFile(filepath.Join(wrapDir, "securechain"), []byte(wrapper), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -257,5 +268,26 @@ func TestTheExamplesOfTheCISignInRemoveTheTokenServiceFromTheInstall(t *testing.
 		if installs == 0 {
 			t.Errorf("%s: the example of the CI sign-in has no install step", path)
 		}
+	}
+}
+
+// No step of the action gives the portal token the name TUXCARE_PORTAL_TOKEN
+// (SC-2799, review 1): a `version` from before the rename removes only
+// SECURECHAIN_PORTAL_TOKEN from the programs that it starts (its
+// internal/exec), so the new name would reach the install and the build of
+// the project. Each step that takes the input unsets the new name instead.
+func TestTheActionNeverGivesTheTokenANameThatAnOldCLIKeeps(t *testing.T) {
+	data, err := os.ReadFile("action.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, "TUXCARE_PORTAL_TOKEN=") {
+			t.Errorf("action.yml:%d sets TUXCARE_PORTAL_TOKEN: %s", i+1, strings.TrimSpace(line))
+		}
+	}
+	want := `if [ -n "${PORTAL_TOKEN:-}" ]; then unset TUXCARE_PORTAL_TOKEN; export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi`
+	if n := strings.Count(string(data), want); n != 2 {
+		t.Errorf("action.yml has %d steps that take the portal token by the rule, want 2 (the credential step and the run step)", n)
 	}
 }

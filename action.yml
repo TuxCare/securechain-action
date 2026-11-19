@@ -11,7 +11,7 @@
 # "latest" is never used: a gate whose binary changes under a pipeline is not
 # a gate.
 #
-# This file is rendered by the release pipeline: v0.1.90 is the CLI
+# This file is rendered by the release pipeline: v0.1.93 is the CLI
 # release the wrapper was published with, and the wrapper's own tag is that
 # same version. Edit the source in the securechain-cli repository under
 # tools/release/github-action/, never this copy.
@@ -28,7 +28,7 @@ inputs:
       SecureChain CLI release to run, as vX.Y.Z. Pinned and checksum-verified;
       the default is the release this wrapper was published with.
     required: false
-    default: "v0.1.90"
+    default: "v0.1.93"
   command:
     description: >-
       The subcommand to run. `check` is the gate; `status` reads without
@@ -55,7 +55,8 @@ inputs:
   portal-token:
     description: >-
       TuxCare portal token, from a repository secret. Passed to the CLI as
-      SECURECHAIN_PORTAL_TOKEN (doc 19 §1). It also fetches the registry
+      SECURECHAIN_PORTAL_TOKEN (doc 19 §1), the name that each CLI release
+      reads and keeps from the programs that it starts. It also fetches the registry
       credential the project's own package manager needs (doc 19 §9),
       through `registry-login` below. Optional: with no portal token and a
       `portal-url`, the CLI signs in with the OIDC token of the job (doc 19
@@ -66,9 +67,9 @@ inputs:
   portal-url:
     description: >-
       The address of your workspace, for example https://acme.example.com.
-      Passed to the CLI as SECURECHAIN_PORTAL_URL. The CI sign-in needs it:
+      Passed to the CLI as TUXCARE_PORTAL_URL and SECURECHAIN_PORTAL_URL. The CI sign-in needs it:
       it is the audience of the OIDC token. Empty: the CLI's own default,
-      or a SECURECHAIN_PORTAL_URL that the job sets.
+      or a TUXCARE_PORTAL_URL (or SECURECHAIN_PORTAL_URL) that the job sets.
     required: false
     default: ""
   registry-login:
@@ -120,7 +121,13 @@ runs:
         # The install script of the SAME release, so the wrapper and the
         # binary can never disagree about how a download is verified.
         curl -fsSL "$base/$ver/install.sh" -o "$RUNNER_TEMP/securechain-install.sh"
-        SECURECHAIN_VERSION="$ver" SECURECHAIN_INSTALL_DIR="$bin" SECURECHAIN_DOWNLOAD_BASE="$base" \
+        # Both names of each variable (SC-3289): the script of a release
+        # since the rename reads TUXCARE_<X> first, so a TUXCARE_VERSION of
+        # the job beat the pin of this step; the script of an older release
+        # reads only SECURECHAIN_<X>.
+        TUXCARE_VERSION="$ver" SECURECHAIN_VERSION="$ver" \
+          TUXCARE_INSTALL_DIR="$bin" SECURECHAIN_INSTALL_DIR="$bin" \
+          TUXCARE_DOWNLOAD_BASE="$base" SECURECHAIN_DOWNLOAD_BASE="$base" \
           sh "$RUNNER_TEMP/securechain-install.sh"
         echo "$bin" >> "$GITHUB_PATH"
         "$bin/securechain" version
@@ -157,11 +164,18 @@ runs:
         # CI sign-in"): GitHub sets ACTIONS_ID_TOKEN_REQUEST_URL and
         # ACTIONS_ID_TOKEN_REQUEST_TOKEN in each step of a job with
         # id-token: write, and the portal URL is the audience. PORTAL_TOKEN
-        # goes: the CLI removes SECURECHAIN_PORTAL_TOKEN from each program
-        # it starts, and knows no other name (doc 10).
-        if [ -n "${PORTAL_TOKEN:-}" ]; then export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
+        # goes: the CLI removes SECURECHAIN_PORTAL_TOKEN from each program it
+        # starts (and TUXCARE_PORTAL_TOKEN since SC-2796), and knows no other
+        # name (doc 10).
+        # The token goes as SECURECHAIN_PORTAL_TOKEN only (SC-2799): a
+        # `version` before the rename reads that name and removes no other
+        # one, so a TUXCARE_PORTAL_TOKEN would reach the programs that it
+        # starts. The input unsets TUXCARE_PORTAL_TOKEN of the job's env, so
+        # the input wins also for a CLI that reads TUXCARE_<X> first. The URL
+        # is no secret: it goes in both names, for the same reason.
+        if [ -n "${PORTAL_TOKEN:-}" ]; then unset TUXCARE_PORTAL_TOKEN; export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
         unset PORTAL_TOKEN
-        if [ -n "${PORTAL_URL:-}" ]; then export SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
+        if [ -n "${PORTAL_URL:-}" ]; then export TUXCARE_PORTAL_URL="$PORTAL_URL" SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
         case "$REGISTRY_LOGIN" in
           job-dir) ;;
           none)
@@ -277,10 +291,11 @@ runs:
       run: |
         set -u
         # The portal inputs, as in the credential step: the CI sign-in when
-        # no portal token is given (doc 19 §1, "The CI sign-in").
-        if [ -n "${PORTAL_TOKEN:-}" ]; then export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
+        # no portal token is given (doc 19 §1, "The CI sign-in"). The token
+        # as SECURECHAIN_PORTAL_TOKEN only, the URL in both names (SC-2799).
+        if [ -n "${PORTAL_TOKEN:-}" ]; then unset TUXCARE_PORTAL_TOKEN; export SECURECHAIN_PORTAL_TOKEN="$PORTAL_TOKEN"; fi
         unset PORTAL_TOKEN
-        if [ -n "${PORTAL_URL:-}" ]; then export SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
+        if [ -n "${PORTAL_URL:-}" ]; then export TUXCARE_PORTAL_URL="$PORTAL_URL" SECURECHAIN_PORTAL_URL="$PORTAL_URL"; fi
         cmd="$COMMAND"
         dir="$DIR"
         if [ "$cmd" = registry ]; then
